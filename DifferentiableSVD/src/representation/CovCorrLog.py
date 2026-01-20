@@ -5,7 +5,7 @@ from torch.autograd import Function
 from .MPNCOV import CovpoolLayer, SqrtmLayer, TriuvecLayer
 
 class CovCorrLog(nn.Module):
-    def __init__(self, sqrt_method='none', iterNum=5, correlation=0, corr_method='olm', log_op=None, max_iter=100, corr_k=50, series_order=0, cov_square=False, cov_power_1p5=False, cov_power_n=0, is_vec=True, input_dim=2048, dimension_reduction=None):
+    def __init__(self, sqrt_method='none', iterNum=5, correlation=0, corr_method='olm', log_op=None, max_iter=100, corr_k=50, series_order=0, cov_square=False, cov_power_1p5=False, cov_power_n=0, is_vec=True, input_dim=2048, dimension_reduction=None, force_fp64=False):
         super(CovCorrLog, self).__init__()
         self.sqrt_method = sqrt_method
         self.iterNum = iterNum
@@ -19,6 +19,7 @@ class CovCorrLog(nn.Module):
         self.cov_power_1p5 = bool(cov_power_1p5)
         self.cov_power_n = int(cov_power_n)
         self.is_vec = is_vec
+        self.force_fp64 = bool(force_fp64)
         self.dr = dimension_reduction
         if self.dr is not None:
             self.conv_dr_block = nn.Sequential(
@@ -123,6 +124,9 @@ class CovCorrLog(nn.Module):
     def forward(self, x):
         if self.dr is not None:
             x = self.conv_dr_block(x)
+        out_dtype = x.dtype
+        if self.force_fp64:
+            x = x.to(torch.float64)
         x = self._cov_pool(x)
         if self.cov_power_1p5 and self.corr_method in ['ecm','lecm','olm','lsm']:
             eigvals, eigvecs = torch.linalg.eigh(x)
@@ -156,4 +160,6 @@ class CovCorrLog(nn.Module):
                 X = x
         if self.is_vec:
             X = TriuvecLayer(X)
+        if self.force_fp64 and X.dtype != out_dtype:
+            X = X.to(out_dtype)
         return X

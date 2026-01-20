@@ -83,7 +83,6 @@ class MPNCOV(nn.Module):
 class Covpool(Function):
      @staticmethod
      def forward(ctx, input):
-         input = input.double()
          x = input
          batchSize = x.data.shape[0]
          dim = x.data.shape[1]
@@ -109,7 +108,7 @@ class Covpool(Function):
          grad_input = grad_output + grad_output.transpose(1,2)
          grad_input = grad_input.bmm(x).bmm(I_hat)
          #print(grad_input.mean())
-         grad_input = grad_input.reshape(batchSize,dim,h,w).float()
+         grad_input = grad_input.reshape(batchSize,dim,h,w).type(x.dtype)
          return grad_input
 
 class Sqrtm(Function):
@@ -189,7 +188,7 @@ class Triuvec(Function):
          I = torch.ones(dim,dim).triu().reshape(dim*dim)
          index = I.nonzero()
          y = torch.zeros(batchSize,int(dim*(dim+1)/2),device = x.device).type(dtype)
-         y = x[:,index].float()
+         y = x[:,index].type(dtype)
          ctx.save_for_backward(input,index)
          return y
      @staticmethod
@@ -199,7 +198,7 @@ class Triuvec(Function):
          batchSize = x.data.shape[0]
          dim = x.data.shape[1]
          dtype = x.dtype
-         grad_input = torch.zeros(batchSize,dim*dim,device = x.device,requires_grad=False)
+         grad_input = torch.zeros(batchSize,dim*dim,device = x.device,requires_grad=False, dtype=dtype)
          grad_input[:,index] = grad_output
          grad_input = grad_input.reshape(batchSize,dim,dim).type(dtype)
          return grad_input

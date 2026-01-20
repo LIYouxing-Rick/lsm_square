@@ -5,7 +5,7 @@ from torch.autograd import Function
 from .MPNCOV import CovpoolLayer, SqrtmLayer, TriuvecLayer
 
 class CovCorrLog(nn.Module):
-    def __init__(self, sqrt_method='none', iterNum=5, correlation=0, corr_method='olm', log_op=None, max_iter=100, is_vec=True, input_dim=2048, dimension_reduction=None, nystrom_rank=50):
+    def __init__(self, sqrt_method='none', iterNum=5, correlation=0, corr_method='olm', log_op=None, max_iter=100, is_vec=True, input_dim=2048, dimension_reduction=None, nystrom_rank=50, force_fp64=False):
         super(CovCorrLog, self).__init__()
         self.sqrt_method = sqrt_method
         self.iterNum = iterNum
@@ -16,6 +16,7 @@ class CovCorrLog(nn.Module):
         self.is_vec = is_vec
         self.dr = dimension_reduction
         self.nystrom_rank = int(nystrom_rank)
+        self.force_fp64 = bool(force_fp64)
         if self.dr is not None:
             self.conv_dr_block = nn.Sequential(
                 nn.Conv2d(input_dim, self.dr, kernel_size=1, stride=1, bias=False),
@@ -109,6 +110,8 @@ class CovCorrLog(nn.Module):
         if self.dr is not None:
             x = self.conv_dr_block(x)
         dtype0 = x.dtype
+        if self.force_fp64:
+            x = x.to(torch.float64)
         x = self._cov_pool(x)
         x = self._matrix_sqrt(x)
         if self.correlation == 1:

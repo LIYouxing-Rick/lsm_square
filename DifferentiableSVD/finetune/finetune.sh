@@ -95,6 +95,7 @@ lr_params_arg=""
 cov_square=0
 cov_pow1p5=0
 cov_pow_n=""
+float_bits=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -175,6 +176,10 @@ while [[ $# -gt 0 ]]; do
       cov_pow_n="$2"; shift 2;;
     --cov_power_n=*|--cov-power-n=*)
       cov_pow_n="${1#*=}"; shift;;
+    --float)
+      float_bits="$2"; shift 2;;
+    --float=*)
+      float_bits="${1#*=}"; shift;;
     *)
       shift;;
   esac
@@ -289,6 +294,7 @@ for d in "${DATASETS[@]}"; do
           if [ -n "$cov_pow_n" ]; then modeldir="$modeldir-pown$cov_pow_n"; fi
           if [ -n "$series_order" ]; then modeldir="$modeldir-so$series_order"; fi
           modeldir="$modeldir-lr$lr-bs$batchsize"
+          if [ "$float_bits" = "64" ]; then modeldir="$modeldir-float64"; fi
           if [ ! -d  "Results" ]; then mkdir Results; fi
           if ! compgen -G "$modeldir/*.pth.tar" > /dev/null; then
             if [ ! -d  "$modeldir" ]; then mkdir $modeldir; fi
@@ -306,6 +312,7 @@ for d in "${DATASETS[@]}"; do
             if [ "$cov_pow1p5" -eq 1 ]; then extra_flags="$extra_flags --cov-power-1p5"; fi
             if [ -n "$cov_pow_n" ]; then extra_flags="$extra_flags --cov-power-n $cov_pow_n"; fi
             if [ -n "$series_order" ]; then extra_flags="$extra_flags --series-order $series_order"; fi
+            if [ "$float_bits" = "64" ]; then extra_flags="$extra_flags --float 64"; fi
             $runner \
                    --benchmark $benchmark \
                    --pretrained \
@@ -347,6 +354,7 @@ for d in "${DATASETS[@]}"; do
             if [ "$cov_pow1p5" -eq 1 ]; then extra_flags="$extra_flags --cov-power-1p5"; fi
             if [ -n "$cov_pow_n" ]; then extra_flags="$extra_flags --cov-power-n $cov_pow_n"; fi
             if [ -n "$series_order" ]; then extra_flags="$extra_flags --series-order $series_order"; fi
+            if [ "$float_bits" = "64" ]; then extra_flags="$extra_flags --float 64"; fi
             $runner \
                    --benchmark $benchmark \
                    --pretrained \

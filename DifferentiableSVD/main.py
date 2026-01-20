@@ -83,6 +83,8 @@ parser.add_argument('--max-iter', default=100, type=int,
                     help='max iterations for LSM/OLM solvers')
 parser.add_argument('--log-order', default=8, type=int,
                     help='polynomial/order parameter for log methods')
+parser.add_argument('--float', dest='float', default=32, type=int, choices=[32, 64],
+                    help='use float64 for GCP part when set to 64')
 parser.add_argument('--series-order', default=0, type=int,
                     help='series order for LT^1 log and LT^0 exp used in LECM (0=auto)')
 parser.add_argument('--cov-square', dest='cov_square', action='store_true',
@@ -112,6 +114,8 @@ def main():
     global args, best_prec1
     args = parser.parse_args()
     print(args)
+    if getattr(args, 'float', 32) == 64 and args.modeldir is not None and 'float64' not in os.path.basename(args.modeldir):
+        args.modeldir = args.modeldir + '-float64'
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -169,6 +173,7 @@ def main():
                           'cov_square':args.cov_square,
                           'cov_power_1p5':args.cov_power_1p5,
                           'cov_power_n':args.cov_power_n,
+                          'force_fp64': (getattr(args, 'float', 32) == 64),
                           'is_vec':True,
                           'input_dim':2048,
                           'dimension_reduction':256}
@@ -417,9 +422,14 @@ def main():
             cov_pow1p5 = 1 if args.cov_power_1p5 else 0
             cov_pow_n = args.cov_power_n if args.cov_power_n is not None else 0
             with open(os.path.join(outdir, 'best_acc.txt'), 'a') as f:
-                f.write(
-                    'benchmark={}; arch={}; representation={}; correlation={}; corr_method={}; corr_k={}; log_method={}; log_order={}; max_iter={}; epochs={}; lr_method={}; lr_power={}; cov_pow1p5={}; cov_pow_n={}; lr={}; batchsize={}; modeldir={}; best@50={:.3f}; best@100={:.3f}; best@all={:.3f}\n'.format(
-                        args.benchmark, args.arch, args.representation, args.correlation, args.corr_method, args.corr_k, args.log_method, args.log_order, args.max_iter, args.epochs, args.lr_method, lr_power, cov_pow1p5, cov_pow_n, args.lr, args.batch_size, args.modeldir, best_prec1_50, best_prec1_100, best_prec1))
+                if getattr(args, 'float', 32) == 64:
+                    f.write(
+                        'benchmark={}; arch={}; float=64; representation={}; correlation={}; corr_method={}; corr_k={}; log_method={}; log_order={}; max_iter={}; epochs={}; lr_method={}; lr_power={}; cov_pow1p5={}; cov_pow_n={}; lr={}; batchsize={}; modeldir={}; best@50={:.3f}; best@100={:.3f}; best@all={:.3f}\n'.format(
+                            args.benchmark, args.arch, args.representation, args.correlation, args.corr_method, args.corr_k, args.log_method, args.log_order, args.max_iter, args.epochs, args.lr_method, lr_power, cov_pow1p5, cov_pow_n, args.lr, args.batch_size, args.modeldir, best_prec1_50, best_prec1_100, best_prec1))
+                else:
+                    f.write(
+                        'benchmark={}; arch={}; representation={}; correlation={}; corr_method={}; corr_k={}; log_method={}; log_order={}; max_iter={}; epochs={}; lr_method={}; lr_power={}; cov_pow1p5={}; cov_pow_n={}; lr={}; batchsize={}; modeldir={}; best@50={:.3f}; best@100={:.3f}; best@all={:.3f}\n'.format(
+                            args.benchmark, args.arch, args.representation, args.correlation, args.corr_method, args.corr_k, args.log_method, args.log_order, args.max_iter, args.epochs, args.lr_method, lr_power, cov_pow1p5, cov_pow_n, args.lr, args.batch_size, args.modeldir, best_prec1_50, best_prec1_100, best_prec1))
         except Exception as e:
             print('Write best acc failed:', e)
     if evaluate_transforms is not None:

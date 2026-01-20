@@ -90,6 +90,7 @@ amp=0
 micro_bs=""
 accum_steps=""
 dim_reduction=""
+float_bits=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -146,6 +147,10 @@ while [[ $# -gt 0 ]]; do
       optim="$2"; shift 2;;
     --nystrom_rank|--nystrom-rank)
       nystrom_rank="$2"; shift 2;;
+    --float)
+      float_bits="$2"; shift 2;;
+    --float=*)
+      float_bits="${1#*=}"; shift;;
     *)
       shift;;
   esac
@@ -224,6 +229,7 @@ for d in "${DATASETS[@]}"; do
         shape_tag="mat"
         if [ "$corr_method" != "ecm" ] && [ "$corr_method" != "lecm" ]; then shape_tag="vec"; fi
         modeldir=Results/Finetune-$benchmark-$arch-$image_representation-$corr_method-$log_method-$shape_tag-nrk$nystrom_rank-lr$lr-bs$batchsize
+        if [ "$float_bits" = "64" ]; then modeldir="$modeldir-float64"; fi
         if [ ! -d  "Results" ]; then mkdir Results; fi
         if ! compgen -G "$modeldir/*.pth.tar" > /dev/null; then
           if [ ! -d  "$modeldir" ]; then mkdir $modeldir; fi
@@ -237,6 +243,7 @@ for d in "${DATASETS[@]}"; do
           if [ -n "$accum_steps" ]; then extra_flags="$extra_flags --accum-steps $accum_steps"; fi
           if [ -n "$micro_bs" ]; then extra_flags="$extra_flags --micro-batch-size $micro_bs"; fi
           if [ -n "$dim_reduction" ]; then extra_flags="$extra_flags --dim-reduction $dim_reduction"; fi
+          if [ "$float_bits" = "64" ]; then extra_flags="$extra_flags --float 64"; fi
           $runner \
                  --benchmark $benchmark \
                  --pretrained \
@@ -276,6 +283,7 @@ for d in "${DATASETS[@]}"; do
           if [ -n "$accum_steps" ]; then extra_flags="$extra_flags --accum-steps $accum_steps"; fi
           if [ -n "$micro_bs" ]; then extra_flags="$extra_flags --micro-batch-size $micro_bs"; fi
           if [ -n "$dim_reduction" ]; then extra_flags="$extra_flags --dim-reduction $dim_reduction"; fi
+          if [ "$float_bits" = "64" ]; then extra_flags="$extra_flags --float 64"; fi
           $runner \
                  --benchmark $benchmark \
                  --pretrained \

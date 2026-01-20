@@ -87,6 +87,8 @@ parser.add_argument('--max-iter', default=100, type=int,
                     help='max iterations for LSM/OLM solvers')
 parser.add_argument('--log-order', default=8, type=int,
                     help='polynomial/order parameter for log methods')
+parser.add_argument('--float', dest='float', default=32, type=int, choices=[32, 64],
+                    help='use float64 for GCP part when set to 64')
 parser.add_argument('--num-classes', default=1000, type=int,
                     help='define the number of classes')
 #parser.add_argument('--curvature', default=1.0, type=float,
@@ -108,6 +110,8 @@ def main():
     global args, best_prec1
     args = parser.parse_args()
     print(args)
+    if getattr(args, 'float', 32) == 64 and args.modeldir is not None and 'float64' not in os.path.basename(args.modeldir):
+        args.modeldir = args.modeldir + '-float64'
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -163,7 +167,8 @@ def main():
                           'is_vec': False if args.corr_method in ['ecm','lecm'] else True,
                           'input_dim':2048,
                           'dimension_reduction':256,
-                          'nystrom_rank': args.nystrom_rank}
+                          'nystrom_rank': args.nystrom_rank,
+                          'force_fp64': (getattr(args, 'float', 32) == 64)}
     elif args.representation == 'GAvP':
         representation = {'function':GAvP,
                           'input_dim':2048}
@@ -433,9 +438,14 @@ def main():
                         lr_params_str = ' '.join(map(str, args.lr_params[0]))
                 except Exception:
                     lr_params_str = ''
-                f.write(
-                    'benchmark={}; arch={}; representation={}; correlation={}; corr_method={};log_method={}; log_order={}; max_iter={}; epochs={}; lr_method={}; lr={}; lr_params={}; classifier_factor={}; batchsize={}; modeldir={}; best@50={:.3f}; best@100={:.3f}; best@all={:.3f}\n'.format(
-                        args.benchmark, args.arch, args.representation, args.correlation, args.corr_method, args.log_method, args.log_order, args.max_iter, args.epochs, args.lr_method, args.lr, lr_params_str, args.classifier_factor, args.batch_size, args.modeldir, best_prec1_50, best_prec1_100, best_prec1))
+                if getattr(args, 'float', 32) == 64:
+                    f.write(
+                        'benchmark={}; arch={}; float=64; representation={}; correlation={}; corr_method={};log_method={}; log_order={}; max_iter={}; epochs={}; lr_method={}; lr={}; lr_params={}; classifier_factor={}; batchsize={}; modeldir={}; best@50={:.3f}; best@100={:.3f}; best@all={:.3f}\n'.format(
+                            args.benchmark, args.arch, args.representation, args.correlation, args.corr_method, args.log_method, args.log_order, args.max_iter, args.epochs, args.lr_method, args.lr, lr_params_str, args.classifier_factor, args.batch_size, args.modeldir, best_prec1_50, best_prec1_100, best_prec1))
+                else:
+                    f.write(
+                        'benchmark={}; arch={}; representation={}; correlation={}; corr_method={};log_method={}; log_order={}; max_iter={}; epochs={}; lr_method={}; lr={}; lr_params={}; classifier_factor={}; batchsize={}; modeldir={}; best@50={:.3f}; best@100={:.3f}; best@all={:.3f}\n'.format(
+                            args.benchmark, args.arch, args.representation, args.correlation, args.corr_method, args.log_method, args.log_order, args.max_iter, args.epochs, args.lr_method, args.lr, lr_params_str, args.classifier_factor, args.batch_size, args.modeldir, best_prec1_50, best_prec1_100, best_prec1))
         except Exception as e:
             print('Write best acc failed:', e)
     if evaluate_transforms is not None:
