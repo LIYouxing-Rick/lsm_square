@@ -1,0 +1,10 @@
+*
+!/.gitignore
+
+!/实验指令.txt
+!/DifferentiableSVD/
+!/DifferentiableSVD/**
+!/DifferentiableSVD_pcm/
+!/DifferentiableSVD_pcm/**
+!/correlation_metric/
+!/correlation_metric/**

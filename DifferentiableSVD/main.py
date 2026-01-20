@@ -1,0 +1,704 @@
+import argparse
+import os
+import random
+import shutil
+import time
+import warnings
+
+import numpy as np
+
+
+from torchvision import datasets
+from functions import *
+from imagepreprocess import *
+from model_init import *
+from src.representation import *
+from src.torchviz import *
+from functions import plot_grad_flow
+import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
+import torch.distributed as dist
+import torch.optim
+import torch.utils.data
+import torch.utils.data.distributed
+from dataset import *
+import sys
+sys.path.append('/root')
+sys.path.append('/root/test')
+
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+parser.add_argument('data', metavar='DIR',default='/home/yuesong/ILSVRC2012/',
+                    help='path to the dataset')
+parser.add_argument('--arch', '-a', metavar='ARCH', default='mpncovresnet',
+                    help='model architecture: ')
+parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
+                    help='number of data loading workers (default: 4)')
+parser.add_argument('--epochs', default=100, type=int, metavar='N',
+                    help='number of total epochs to run')
+parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
+                    help='manual epoch number (useful on restarts)')
+parser.add_argument('-b', '--batch-size', default=256, type=int,
+                    metavar='N', help='mini-batch size (default: 256)')
+parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+                    metavar='LR', help='initial learning rate')
+parser.add_argument('--lr-method', default='none', type=str,
+                    help='method of learning rate: none/step/log/stepf')
+parser.add_argument('--lr-params', default=[], dest='lr_params',nargs='*',type=float,
+                    action='append', help='params of lr method (stepf: k f or pairs)')
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+                    help='momentum')
+parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
+                    metavar='W', help='weight decay (default: 1e-4)')
+parser.add_argument('--print-freq', '-p', default=10, type=int,
+                    metavar='N', help='print frequency (default: 10)')
+parser.add_argument('--resume', default='', type=str, metavar='PATH',
+                    help='path to latest checkpoint (default: none)')
+parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
+                    help='evaluate model on validation set')
+parser.add_argument('--pretrained', dest='pretrained', action='store_true',
+                    help='use pre-trained model')
+parser.add_argument('--world-size', default=1, type=int,
+                    help='number of distributed processes')
+parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
+                    help='url used to set up distributed training')
+parser.add_argument('--dist-backend', default='gloo', type=str,
+                    help='distributed backend')
+parser.add_argument('--seed', default=None, type=int,
+                    help='seed for initializing training. ')
+parser.add_argument('--gpu', default=None, type=int,
+                    help='GPU id to use.')
+parser.add_argument('--modeldir', default=None, type=str,
+                    help='director of checkpoint')
+parser.add_argument('--representation', default='MPNCOV', type=str,
+                    help='define the representation method')
+parser.add_argument('--correlation', default=0, type=int,
+                    help='whether to use correlation pipeline (0/1)')
+parser.add_argument('--corr-method', default='olm', type=str,
+                    help='correlation method: olm/lsm/ecm/lecm')
+parser.add_argument('--log-method', default='none', type=str,
+                    help='log method: none/chebyshev/laguerre/legendre/taylor/pade')
+parser.add_argument('--max-iter', default=100, type=int,
+                    help='max iterations for LSM/OLM solvers')
+parser.add_argument('--log-order', default=8, type=int,
+                    help='polynomial/order parameter for log methods')
+parser.add_argument('--series-order', default=0, type=int,
+                    help='series order for LT^1 log and LT^0 exp used in LECM (0=auto)')
+parser.add_argument('--cov-square', dest='cov_square', action='store_true',
+                    help='square covariance before correlation methods')
+parser.add_argument('--cov-power-1p5', dest='cov_power_1p5', action='store_true',
+                    help='use covariance^1.5 before correlation methods')
+parser.add_argument('--cov-power-n', dest='cov_power_n', default=0, type=int,
+                    help='use covariance^n (integer n>1) before correlation methods')
+parser.add_argument('--corr-k', default=50, type=int,
+                    help='Nyström subsample size for ECM/LECM')
+parser.add_argument('--num-classes', default=1000, type=int,
+                    help='define the number of classes')
+parser.add_argument('--freezed-layer', default=None, type=int,
+                    help='define the end of freezed layer')
+parser.add_argument('--store-model-everyepoch', dest='store_model_everyepoch', action='store_true',
+                    help='store checkpoint in every epoch')
+parser.add_argument('--classifier-factor', default=None, type=int,
+                    help='define the multiply factor of classifier')
+parser.add_argument('--benchmark', default='ILSVRC2012', type=str,
+                    help='name of dataset')
+parser.add_argument('--local_rank', default=int(os.environ.get('LOCAL_RANK', 0)), type=int,
+                    help='local rank for distributed training')
+best_prec1 = 0
+grad=[]
+grad_temp=[]
+def main():
+    global args, best_prec1
+    args = parser.parse_args()
+    print(args)
+    if args.seed is not None:
+        random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        cudnn.deterministic = True
+        warnings.warn('You have chosen to seed training. '
+                      'This will turn on the CUDNN deterministic setting, '
+                      'which can slow down your training considerably! '
+                      'You may see unexpected behavior when restarting '
+                      'from checkpoints.')
+
+    if args.gpu is not None:
+        warnings.warn('You have chosen a specific GPU. This will completely '
+                      'disable data parallelism.')
+
+    args.distributed = args.world_size > 1
+
+    if args.distributed:
+        torch.cuda.set_device(args.local_rank)
+        dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+                                world_size=args.world_size)
+
+    # create model
+    log_op = None
+    if args.log_method != 'none':
+        if args.log_method == 'chebyshev':
+            from chebyshev_log import ChebyshevLog
+            log_op = ChebyshevLog(order=args.log_order)
+        elif args.log_method == 'laguerre':
+            from laguerre_log import LaguerreLog
+            log_op = LaguerreLog(order=args.log_order)
+        elif args.log_method == 'legendre':
+            from legendre_log import LegendreLog
+            log_op = LegendreLog(order=args.log_order)
+        elif args.log_method == 'taylor':
+            from taylor_log import TaylorLog
+            log_op = TaylorLog(order=args.log_order)
+        elif args.log_method == 'pade':
+            from pade_log import PadeLog
+            log_op = PadeLog(order=args.log_order)
+        else:
+            warnings.warn("=> undefined log method '{}'".format(args.log_method))
+            log_op = None
+
+    spd_methods = ['none','MPNCOV','SVD_Taylor','SVD_TopN','SVD_Trunc','SVD_Pade']
+    if args.representation in spd_methods:
+        representation = {'function':CovCorrLog,
+                          'sqrt_method':args.representation,
+                          'iterNum':5,
+                          'correlation':args.correlation,
+                          'corr_method':args.corr_method,
+                          'log_op':log_op,
+                          'max_iter':args.max_iter,
+                          'corr_k':args.corr_k,
+                          'series_order':args.series_order,
+                          'cov_square':args.cov_square,
+                          'cov_power_1p5':args.cov_power_1p5,
+                          'cov_power_n':args.cov_power_n,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'GAvP':
+        representation = {'function':GAvP,
+                          'input_dim':2048}
+    elif args.representation == 'MPNCOV':
+        representation = {'function':MPNCOV,
+                          'iterNum':5,
+                          'is_sqrt':True,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'SVD_Newton':
+        representation = {'function':SVD_Newton,
+                          'iterNum':10,
+                          'is_sqrt':True,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'SVD_Trunc':
+        representation = {'function':SVD_Trunc,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'SVD_Original':
+        representation = {'function':SVD_Original,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'SVD_TopN':
+        representation = {'function':SVD_TopN,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'SVD_Taylor':
+        representation = {'function':SVD_Taylor,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'SVD_PI':
+        representation = {'function':SVD_PI,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'SVD_Pade':
+        representation = {'function':SVD_Pade,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'SEB':
+        representation = {'function':SEB,
+                          'is_vec':True,
+                          'input_dim':2048,
+                          'dimension_reduction':256}
+    elif args.representation == 'BCNN':
+        representation = {'function':BCNN,
+                          'is_vec':True,
+                          'input_dim':2048}
+    elif args.representation == 'CBP':
+        representation = {'function':CBP,
+                          'thresh':1e-8,
+                          'projDim':8192,
+                          'input_dim': 512}
+    else:
+        warnings.warn('=> You did not choose a global image representation method!')
+        representation = None # which for original vgg or alexnet
+
+    model = get_model(args.arch,
+                      representation,
+                      args.num_classes,
+                      args.freezed_layer,
+                      pretrained=args.pretrained)
+    # plot network
+    #vizNet(model, args.modeldir)
+    # obtain learning rate
+    LR = Learning_rate_generater(args.lr_method, args.lr_params, args.epochs)
+    if args.pretrained:
+        params_list = [{'params': model.features.parameters(), 'lr': args.lr,
+                        'weight_decay': args.weight_decay},]
+        params_list.append({'params': model.representation.parameters(), 'lr': args.lr,
+                        'weight_decay': args.weight_decay})
+        params_list.append({'params': model.classifier.parameters(),
+                            'lr': args.lr*args.classifier_factor,
+                            'weight_decay': 0. if args.arch.startswith('vgg') else args.weight_decay})
+    else:
+        params_list = [{'params': model.features.parameters(), 'lr': args.lr,
+                        'weight_decay': args.weight_decay},]
+        params_list.append({'params': model.representation.parameters(), 'lr': args.lr,
+                        'weight_decay': args.weight_decay})
+        params_list.append({'params': model.classifier.parameters(),
+                            'lr': args.lr*args.classifier_factor,
+                            'weight_decay':args.weight_decay})
+
+    optimizer = torch.optim.SGD(params_list, lr=args.lr,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay)
+    if args.gpu is not None:
+        model = model.cuda(args.gpu)
+    elif args.distributed:
+        model.cuda(args.local_rank)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
+    else:
+        model.cuda()
+        model.features = torch.nn.DataParallel(model.features)
+
+    # define loss function (criterion) and optimizer
+    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    
+
+    # optionally resume from a checkpoint
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            checkpoint = torch.load(args.resume)
+            args.start_epoch = checkpoint['epoch']
+            best_prec1 = checkpoint['best_prec1']
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            # Reset learning rates to reflect current args (e.g., classifier_factor override)
+            try:
+                base_lr = args.lr
+                group_names = ['features','representation','classifier']
+                for i, param_group in enumerate(optimizer.param_groups):
+                    if i < 2:
+                        param_group['lr'] = base_lr
+                    else:
+                        factor = args.classifier_factor if args.classifier_factor is not None else 1
+                        param_group['lr'] = base_lr * factor
+            except Exception as _:
+                pass
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.resume, checkpoint['epoch']))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.resume))
+
+    cudnn.benchmark = True
+
+    train_transforms, val_transforms, evaluate_transforms = preprocess_strategy(args.benchmark)
+
+    if args.benchmark.startswith('ILSVRC2012') or args.benchmark.startswith('imagenet'):
+        traindir = os.path.join(args.data, 'train')
+        valdir = os.path.join(args.data, 'val')
+        train_dataset = datasets.ImageFolder(
+            traindir,
+            train_transforms)
+        val_dataset = datasets.ImageFolder(
+                valdir,
+                val_transforms)
+    elif args.benchmark.startswith('CUB_200_2011'):
+        data_root = args.data
+        base = os.path.basename(os.path.normpath(data_root)).lower()
+        if base == 'cub_200_2011':
+            data_root = os.path.dirname(os.path.normpath(data_root))
+        train_dataset = Cub2011(data_root, train=True, transform=train_transforms,download=False)
+        val_dataset = Cub2011(data_root, train=False, transform=val_transforms,download=False)
+    elif args.benchmark.startswith('fgvc-aircraft'):
+        train_dataset = Aircraft(args.data, train=True, transform=train_transforms, download=False)
+        val_dataset = Aircraft(args.data, train=False, transform=val_transforms, download=False)
+    elif args.benchmark.startswith('datasets-fgvc-cars'):
+        train_dataset = Cars(args.data, train=True, transform=train_transforms, download=False)
+        val_dataset = Cars(args.data, train=False, transform=val_transforms, download=False)
+    elif args.benchmark.startswith('Dogs'):
+        train_dataset = Dogs(args.data, train=True, transform=train_transforms, download=False)
+        val_dataset = Dogs(args.data, train=False, transform=val_transforms, download=False)
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    else:
+        train_sampler = None
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=args.batch_size, shuffle=False,
+        num_workers=args.workers, pin_memory=True)
+
+    ## init evaluation data loader
+    if evaluate_transforms is not None:
+        evaluate_loader = torch.utils.data.DataLoader(
+            val_dataset,#datasets.ImageFolder(valdir, evaluate_transforms),
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
+
+    if args.evaluate:
+        if evaluate_transforms is not None:
+            validate(evaluate_loader, model, criterion)
+        validate(val_loader, model, criterion)
+        return
+    # make directory for storing checkpoint files
+    if os.path.exists(args.modeldir) is not True:
+        os.mkdir(args.modeldir)
+    stats_ = stats(args.modeldir, args.start_epoch)
+    # register hook to see the gradients if you want
+    #model.representation.conv_dr_block[0].register_backward_hook(hook_fn)
+    best_prec1_50 = 0.0
+    best_prec1_100 = 0.0
+    for epoch in range(args.start_epoch, args.epochs):
+        if args.distributed:
+            train_sampler.set_epoch(epoch)
+        adjust_learning_rate(optimizer, LR.lr_factor, epoch)
+        # train for one epoch
+        trainObj, top1, top5 = train(train_loader, model, criterion, optimizer, epoch)
+        # evaluate on validation
+        valObj, prec1, prec5 = validate(val_loader, model, criterion)
+        # update stats
+        stats_._update(trainObj, top1, top5, valObj, prec1, prec5)
+        # remember best prec@1 and save checkpoint
+        is_best = prec1 > best_prec1
+        best_prec1 = max(prec1, best_prec1)
+        if (epoch + 1) <= 50:
+            best_prec1_50 = max(best_prec1_50, prec1)
+        if (epoch + 1) <= 100:
+            best_prec1_100 = max(best_prec1_100, prec1)
+        filename = []
+        if args.store_model_everyepoch:
+            filename.append(os.path.join(args.modeldir, 'net-epoch-%s.pth.tar' % (epoch + 1)))
+        else:
+            filename.append(os.path.join(args.modeldir, 'checkpoint.pth.tar'))
+        filename.append(os.path.join(args.modeldir, 'model_best.pth.tar'))
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': args.arch,
+            'state_dict': model.state_dict(),
+            'best_prec1': best_prec1,
+            'optimizer' : optimizer.state_dict(),
+        }, is_best, filename)
+        plot_curve(stats_, args.modeldir, True)
+        data = stats_
+        sio.savemat(os.path.join(args.modeldir,'stats.mat'), {'data':data})
+        #text_save(os.path.join(args.modeldir,'grad.txt'),grad)
+        print("Save gradient of this epoch")
+    if not args.distributed or dist.get_rank() == 0:
+        try:
+            outdir = '/root/resultes_svd'
+            if os.path.exists(outdir) is not True:
+                os.mkdir(outdir)
+            lr_power = None
+            try:
+                if args.lr_method == 'cos' and len(args.lr_params) > 0 and len(args.lr_params[0]) > 0:
+                    lr_power = args.lr_params[0][0]
+            except Exception:
+                lr_power = None
+            cov_pow1p5 = 1 if args.cov_power_1p5 else 0
+            cov_pow_n = args.cov_power_n if args.cov_power_n is not None else 0
+            with open(os.path.join(outdir, 'best_acc.txt'), 'a') as f:
+                f.write(
+                    'benchmark={}; arch={}; representation={}; correlation={}; corr_method={}; corr_k={}; log_method={}; log_order={}; max_iter={}; epochs={}; lr_method={}; lr_power={}; cov_pow1p5={}; cov_pow_n={}; lr={}; batchsize={}; modeldir={}; best@50={:.3f}; best@100={:.3f}; best@all={:.3f}\n'.format(
+                        args.benchmark, args.arch, args.representation, args.correlation, args.corr_method, args.corr_k, args.log_method, args.log_order, args.max_iter, args.epochs, args.lr_method, lr_power, cov_pow1p5, cov_pow_n, args.lr, args.batch_size, args.modeldir, best_prec1_50, best_prec1_100, best_prec1))
+        except Exception as e:
+            print('Write best acc failed:', e)
+    if evaluate_transforms is not None:
+        model_file = os.path.join(args.modeldir, 'model_best.pth.tar')
+        print("=> loading best model '{}'".format(model_file))
+        print("=> start evaluation")
+        best_model = torch.load(model_file)
+        model.load_state_dict(best_model['state_dict'])
+        validate(evaluate_loader, model, criterion)
+
+
+
+
+def train(train_loader, model, criterion, optimizer, epoch):
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+    model.train()
+
+    end = time.time()
+    optimizer.zero_grad()
+    for i, (input, target) in enumerate(train_loader):
+        # measure data loading time
+        data_time.update(time.time() - end)
+        if args.gpu is not None:
+            input = input.cuda(args.gpu, non_blocking=True)
+        target = target.cuda(args.gpu, non_blocking=True)
+        output = model(input)
+        loss_item = criterion(output, target)
+        # print gradient flow
+        #plot_grad_flow(model.named_parameters())
+        # measure accuracy and record loss
+        prec1, prec5 = accuracy(output, target, topk=(1, 5))
+        losses.update(loss_item.item(), input.size(0))
+        top1.update(prec1[0], input.size(0))
+        top5.update(prec5[0], input.size(0))
+        # compute gradient and do SGD step
+        loss = loss_item
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
+        optimizer.step()
+        optimizer.zero_grad()
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % args.print_freq == 0:
+            print('Epoch: [{0}][{1}/{2}]\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                  'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(epoch, i, len(train_loader), batch_time=batch_time,
+                                                                  data_time=data_time, loss=losses, top1=top1, top5=top5))
+            #add the gradient to this epoch
+            #grad.append(sum(grad_temp)/len(grad_temp))
+            #grad_temp.clear()
+            #print(grad)
+    return losses.avg, top1.avg, top5.avg
+
+
+def validate(val_loader, model, criterion):
+    batch_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+    # switch to evaluate mode
+    model.eval()
+
+    with torch.no_grad():
+        end = time.time()
+        for i, (input, target) in enumerate(val_loader):
+            if args.gpu is not None:
+                input = input.cuda(args.gpu, non_blocking=True)
+            target = target.cuda(args.gpu, non_blocking=True)
+            if len(input.size()) > 4:
+                bs, crops, ch, h, w = input.size()
+                output = model(input.view(-1, ch, h, w))
+                output = output.view(bs, crops, -1).mean(dim=1)
+            else:
+                output = model(input)
+            loss = criterion(output, target)
+
+            # measure accuracy and record loss
+            prec1, prec5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), input.size(0))
+            top1.update(prec1[0], input.size(0))
+            top5.update(prec5[0], input.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                print('Test: [{0}/{1}]\t'
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                       i, len(val_loader), batch_time=batch_time, loss=losses,
+                       top1=top1, top5=top5))
+
+        print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
+              .format(top1=top1, top5=top5))
+
+    return losses.avg, top1.avg, top5.avg
+
+
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    torch.save(state, filename[0])
+    if is_best:
+        shutil.copyfile(filename[0], filename[1])
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+class Learning_rate_generater(object):
+    """Generates a list of learning rate for each training epoch"""
+    def __init__(self, method, params, total_epoch):
+        if method == 'step':
+            lr_factor, lr = self.step(params, total_epoch)
+        elif method == 'log':
+            lr_factor, lr = self.log(params, total_epoch)
+        elif method == 'stepf':
+            lr_factor, lr = self.stepf(params, total_epoch)
+        elif method == 'cos':
+            lr_factor, lr = self.cos(params, total_epoch)
+        elif method == 'none':
+            lr_factor, lr = self.constant(total_epoch)
+        else:
+            raise KeyError("=> undefined learning rate method '{}'" .format(method))
+        self.lr_factor = lr_factor
+        self.lr = lr
+    def step(self, params, total_epoch):
+        decrease_until = params[0]
+        decrease_num = len(decrease_until)
+        base_factor = 0.1
+        lr_factor = torch.ones(total_epoch, dtype=torch.double)
+        lr = [args.lr]
+        for num in range(decrease_num):
+            if decrease_until[num] < total_epoch:
+                lr_factor[int(decrease_until[num])] = base_factor
+        for epoch in range(1,total_epoch):
+            lr.append(lr[-1]*lr_factor[epoch])
+        return lr_factor, lr
+    def log(self, params, total_epoch):
+        params = params[0]
+        left_range = params[0]
+        right_range = params[1]
+        np_lr = np.logspace(left_range, right_range, total_epoch)
+        lr_factor = [1]
+        lr = [np_lr[0]]
+        for epoch in range(1, total_epoch):
+            lr.append(np_lr[epoch])
+            lr_factor.append(np_lr[epoch]/np_lr[epoch-1])
+        if lr[0] != args.lr:
+            args.lr = lr[0]
+        return lr_factor, lr
+
+    def stepf(self, params, total_epoch):
+        flat = []
+        for p in params:
+            flat.extend(p)
+        lr_factor = torch.ones(total_epoch, dtype=torch.double)
+        lr = [args.lr]
+        if len(flat) == 2:
+            k = int(flat[0])
+            f = float(flat[1])
+            if k > 0:
+                for e in range(k, total_epoch, k):
+                    lr_factor[e] = f
+        else:
+            if len(flat) % 2 != 0:
+                base_factor = 0.1
+                for ep in flat:
+                    e = int(ep)
+                    if 0 <= e < total_epoch:
+                        lr_factor[e] = base_factor
+            else:
+                for i in range(0, len(flat), 2):
+                    e = int(flat[i])
+                    f = float(flat[i+1])
+                    if 0 <= e < total_epoch:
+                        lr_factor[e] = f
+        for epoch in range(1, total_epoch):
+            lr.append(lr[-1] * lr_factor[epoch])
+        return lr_factor, lr
+
+    def constant(self, total_epoch):
+        lr_factor = torch.ones(total_epoch, dtype=torch.double)
+        lr = [args.lr]
+        for epoch in range(1, total_epoch):
+            lr.append(lr[-1])
+        return lr_factor, lr
+
+    def cos(self, params, total_epoch):
+        p = 1.0
+        try:
+            if len(params) > 0 and len(params[0]) > 0:
+                p = float(params[0][0])
+        except Exception:
+            p = 1.0
+        T = max(1, total_epoch - 1)
+        ts = np.arange(total_epoch, dtype=np.float64)
+        cos_part = (1.0 + np.cos(np.pi * ts / T)) / 2.0
+        np_lr = args.lr * np.power(cos_part, p)
+        lr_factor = [1]
+        lr = [np_lr[0]]
+        for epoch in range(1, total_epoch):
+            prev = np_lr[epoch - 1]
+            curr = np_lr[epoch]
+            lr.append(curr)
+            lr_factor.append(curr / prev if prev != 0 else 0.0)
+        if lr[0] != args.lr:
+            args.lr = lr[0]
+        return lr_factor, lr
+
+
+def adjust_learning_rate(optimizer, lr_factor, epoch):
+    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    #lr = args.lr * (0.1 ** (epoch // 30))
+    groups = ['features']
+    groups.append('representation')
+    groups.append('classifier')
+    num_group = 0
+    for param_group in optimizer.param_groups:
+        param_group['lr'] *= lr_factor[epoch]
+        print('the learning rate is set to {0:.5f} in {1:} part'.format(param_group['lr'], groups[num_group]))
+        num_group += 1
+
+
+def accuracy(output, target, topk=(1,)):
+    """Computes the precision@k for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
+#Save into .txt
+def text_save(filename, data):
+    file = open(filename,'a')
+    for i in range(len(data)):
+        s = str(data[i]).replace('[','').replace(']','')
+        s = s.replace("'",'').replace(',','') +'\n'
+        file.write(s)
+    file.close()
+
+#Hook function to check gradients
+def hook_fn(module, grad_input, grad_output):
+    w,x,o=grad_input
+    grad_temp.append(w.mean())
+
+
+if __name__ == '__main__':
+    main()

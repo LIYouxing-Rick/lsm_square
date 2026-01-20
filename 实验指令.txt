@@ -1,0 +1,214 @@
+python3 /root/test/train_fgvc.py --dataset cars  --method legendre,pade,taylor --order 10 --root /root/data --batch_size 32 --epochs 100 --lr 1e-4 --weight_decay 1e-4 --backbone resnet50 --optimizer AdamW --scheduler cosine --correlation 1 --seed 42 --download
+python3 /root/test/train_fgvc.py --dataset cub2011 --method pade --order 8 --root /root/data --batch_size 32 --epochs 100 --lr 1e-4 --weight_decay 1e-4 --backbone resnet50 --optimizer AdamW --scheduler cosine --correlation 1 --corr_method lsm --max_iter 1,2,3 --seed 42 --download 
+python3 /root/test/train_fgvc.py --dataset cub2011,cars,aircraft --method taylor --order 8 --root /root/data --batch_size 32 --epochs 100 --lr 1e-4 --weight_decay 1e-4 --backbone resnet50 --optimizer AdamW --scheduler cosine --correlation 1 --corr_method ecm --seed 42 --download
+
+
+bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars,CUB --representation mpncov,svd_pade,svd_taylor --correlation 0 --corr_method none --log_method none --order 8 --max_iter 1 --ddp --nproc 2 --devices 0,1 --master_port 29501 && bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars,CUB --representation none --correlation 0 --corr_method none --log_method taylor,laguerre,legendre,pade,chebyshev --order 8 --max_iter 1 --ddp --nproc 2 --devices 0,1 --master_port 2950 
+
+
+- 直接重跑你当前终端的命令即可，脚本会自动 resume 最近的 checkpoint：
+- CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars,CUB --representation mpncov,svd_pade,svd_taylor --correlation 1 --corr_method olm,lsm --log_method chebyshev,legendre --order 8 --max_iter 1 --bs 10 --devices 0
+- 第二个终端保持我们之前的建议，避免 invalid device ordinal ：
+- 用进程内索引 0： CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method olm,lsm --log_method chebyshev,legendre --order 8 --max_iter 1 --bs 10 --devices 0
+- 
+
+一：
+在跑export CUDA_VISIBLE_DEVICES=0
+
+bash /root/DifferentiableSVD/finetune/finetune.sh \
+  --dataset cars --representation mpncov --correlation 1 \
+  --corr_method lsm --log_method legendre --order 8 --max_iter 1 --bs 10 --devices 0
+
+for rep in svd_pade svd_taylor; do
+  for corr in olm lsm; do
+    for logm in chebyshev legendre; do
+      bash /root/DifferentiableSVD/finetune/finetune.sh \
+        --dataset cars --representation "$rep" --correlation 1 \
+        --corr_method "$corr" --log_method "$logm" \
+        --order 8 --max_iter 1 --bs 10 --devices 0
+    done
+  done
+done
+
+还要跑export CUDA_VISIBLE_DEVICES=0
+for rep in mpncov svd_pade svd_taylor; do
+  for corr in olm lsm; do
+    for logm in chebyshev legendre; do
+      bash /root/DifferentiableSVD/finetune/finetune.sh \
+        --dataset CUB --representation "$rep" --correlation 1 \
+        --corr_method "$corr" --log_method "$logm" \
+        --order 8 --max_iter 1 --bs 10 --devices 0
+    done
+  done
+done
+
+
+,CUB
+
+CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars,CUB --representation none --correlation 1 --corr_method phcm --log_method none --bs 10 --devices 0 --classifier_factor 100
+
+
+
+=============================================================================================================
+如果你希望 c 固定为 1（不学习），替换 self.c = nn.Parameter(...) 为 self.register_buffer('c', th.tensor(1.0))。
+注意，c当前是可学习参数！！！
+
+CUDA_VISIBLE_DEVICES=0,1 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh \
+  --dataset cars --representation none --correlation 1 \
+  --corr_method phcm --log_method none \
+  --bs 10 \
+  --classifier_factor 5 \
+  --lr 0.00005 \
+  --optim sgd --weight-decay 1e-4 \
+  --lr_params=30.0 60.0 90.0
+
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh \
+  --dataset cars --representation none --correlation 1 \
+  --corr_method phcm --log_method none \
+  --bs 10 \
+  --classifier_factor 5 \
+  --lr 0.00005 \
+  --optim sgd --weight-decay 1e-4 \
+  --lr_params=30.0 60.0 90.0 \
+  --curvature 1.0
+&&
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh \
+  --dataset cars --representation none --correlation 1 \
+  --corr_method phcm --log_method none \
+  --bs 10 \
+  --classifier_factor 5 \
+  --lr 0.0005 \
+  --optim sgd --weight-decay 1e-4 \
+  --lr_params 30.0 60.0 90.0 \
+  --curvature 1.0
+&&
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh \
+  --dataset cars --representation none --correlation 1 \
+  --corr_method phcm --log_method none \
+  --bs 10 \
+  --classifier_factor 5 \
+  --lr 0.0005 \
+  --optim sgd --weight-decay 1e-4 \
+  --lr_params 30.0 60.0 90.0 \
+  --curvature 0.5
+&&
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh \
+  --dataset cars --representation none --correlation 1 \
+  --corr_method phcm --log_method none \
+  --bs 10 \
+  --classifier_factor 5 \
+  --lr 0.0005 \
+  --optim sgd --weight-decay 1e-4 \
+  --lr_params 30.0 60.0 90.0 \
+  --curvature 0.3
+&&
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh \
+  --dataset cars --representation none --correlation 1 \
+  --corr_method phcm --log_method none \
+  --bs 10 \
+  --classifier_factor 5 \
+  --lr 0.0005 \
+  --optim sgd --weight-decay 1e-4 \
+  --lr_params 30.0 60.0 90.0 \
+  --curvature 1.5
+
+
+=============================================================================================================
+
+--curvature 0.5
+
+
+phcm
+终端1
+bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method phcm --log_method none --bs 10 --classifier_factor 5 --lr 0.00005 --optim adam --weight-decay 5e-4 --lr-method none(pass)
+
+
+bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method phcm --log_method none --bs 10 --classifier_factor 5 --lr 5e-6 --optim sgd --weight-decay 5e-4 --lr-method none (pass)
+
+bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method phcm --log_method none --bs 10 --classifier_factor 5 --lr 5e-5 --optim sgd --weight-decay 5e-4 --lr-method none
+
+bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --nystrom-rank 50 --log_method none --bs 10 --classifier_factor 5 --lr 0.00005 --optim adam --weight-decay 5e-4 --lr-method none
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method none --order 8 --max_iter 100 --lr 0.0005
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method none --order 8 --max_iter 100 --lr 0.00005
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method none --order 8 --max_iter 100 --lr 0.0012 （好）
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method none --order 8 --max_iter 100 --lr 0.012 （pass）
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method none --order 8 --max_iter 100 --lr 0.0012 --classifier-factor 5
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method none --order 8 --max_iter 100 --lr 0.0012 --lr_params=30.0 60.0 90.0
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method none --order 8 --max_iter 100 --lr 0.0012 --lr_params=30.0 60.0 90.0
+
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method phcm --log_method none --bs 10 --classifier_factor 5 --lr 0.00005 --optim sgd --weight-decay 5e-4  --lr_params=30.0 60.0 90.0 && CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method phcm --log_method mpncov --bs 10 --classifier_factor 5 --lr 0.00005 --optim sgd --weight-decay 5e-4  --lr_params=30.0 60.0 90.0
+
+try again（原始的phcm代码错误，可以后续的方向：接下来你和 SOTA 的差距，才真正进入：
+表达能力
+曲率学习
+loss 设计
+多方向 / 多中心 MLR
+下一步我可以继续帮你做的（你选一个）
+1️⃣ 把单向 RMLR 改成多超曲中心（multi-prototype）分类头
+2️⃣ 把 Cholesky → 半球这条路径，换成更干净的 SPD → Hyperbolic 映射
+3️⃣ 给你一套完整的 ablation checklist，帮你定位还差哪 1–2%
+
+
+引入了多头。，我还没搞清楚
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method phcm --log_method mpncov --bs 10 --classifier_factor 5 --lr 0.00005 --optim sgd --weight-decay 5e-4  --lr_params=30.0 60.0 90.0
+
+
+
+——————
+幂次方
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method olm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.0012 --lr_method none  --classifier_factor 5 --cov_square
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method lsm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.0012 --lr_method none  --classifier_factor 5 --cov_square
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.0012 --lr_method none  --classifier_factor 5 --cov_square
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.00012 --lr_method none  --classifier_factor 5 --cov_square
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.00012 --lr_method none  --classifier_factor 5 --cov_square
+
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.00012 --lr_method stepf --lr-params 30 0.2 --classifier_factor 5 --cov_square
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.012 --lr_method stepf --lr-params 100 0.2 --classifier_factor 5 --cov_square
+
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.0012 --lr_method stepf --lr_params 30.0 60.0 90.0 --classifier_factor 5 --cov_square --corr_k=256 && CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.0012 --lr_method stepf --lr_params 30.0 60.0 90.0 --classifier_factor 5  --corr_k=256 --cov-power-1p5 && CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method legendre --log_order 8 --max_iter 1 --bs 10 --lr 0.0012 --lr_method stepf --lr_params 30.0 60.0 90.0 --classifier_factor 5  --corr_k=256 --cov-power-n 3
+
+
++=================================================================================================================================================================
+
+终端2
+CUDA_VISIBLE_DEVICES=0 bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method phcm --log_method none --bs 10 --classifier_factor 5 --lr 0.00005 --optim sgd --weight-decay 5e-4 --lr-method sgd
+
+
+bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --log_method none --bs 10 --classifier_factor 5 --lr 0.0012 --optim sgd --weight-decay 5e-4 --lr-method none --nystrom-return l_full --nystrom-k 50
+
+bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --nystrom-rank 50 --log_method none --bs 10 --classifier_factor 5 --lr 0.0005 --optim sgd --weight-decay 5e-4 --lr-method none
+
+bash /root/DifferentiableSVD_pcm/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method ecm --nystrom-rank 50 --log_method none --bs 10 --classifier_factor 5 --lr 0.005 --optim sgd --weight-decay 5e-4 --lr-method none
+
+
+CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation mpncov --correlation 1 --corr_method olm --log_method legendre --order 8 --max_iter 1 --lr 0.00012,0.012,0.000012 （lr 0.012 50epho后效果差，故提前停止）
+
+（正在进行中）CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation mpncov --correlation 1 --corr_method olm --log_method legendre --order 8 --max_iter 1 --lr 0.000012 
+
+CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation mpncov --correlation 1 --corr_method olm --log_method legendre --order 8 --max_iter 1 --lr 0.012 --lr_params=20.0 40.0 --lr-method step
+
+next： CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation mpncov --correlation 1 --corr_method olm --log_method legendre --order 8 --max_iter 1 --lr 0.12
+
+CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation mpncov --correlation 1 --corr_method olm --log_method legendre --order 8 --max_iter 1 --lr 0.000012&&
+
+CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation mpncov --correlation 1 --corr_method olm --log_method legendre --order 8 --max_iter 1 --lr 0.012 --lr_params=20.0 40.0 --lr-method step
+
+CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation mpncov --correlation 1 --corr_method olm --log_method legendre --order 8 --max_iter 1 --lr 0.12
+
+
+CUDA_VISIBLE_DEVICES=1 bash /root/DifferentiableSVD/finetune/finetune.sh --dataset cars --representation none --correlation 1 --corr_method olm --log_method legendre --order 8 --max_iter 1 --lr 0.012 --lr-method stepf --lr_params 30 0.01 60 0.1
